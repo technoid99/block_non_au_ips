@@ -3,9 +3,8 @@ Module for managing iptables rules.
 """
 
 import subprocess
-from typing import List
-from datetime import datetime
 import sys
+from typing import List
 
 # Import constants
 from util import CHAIN_NAME
@@ -39,14 +38,13 @@ class IPTablesManager:
     
     def chain_exists(self) -> bool:
         """Check if the Australian whitelist chain exists."""
-        # Use a non-disruptive command like -nL which will exit with status 0 if chain exists
         return self.run_iptables(['-nL', CHAIN_NAME], check=False)
     
     def create_whitelist_chain(self) -> None:
         """Create the Australian IP whitelist chain, deleting existing one if necessary."""
         self.log(f"\n🔧 Setting up iptables chain '{CHAIN_NAME}'...")
         
-        # Attempt to remove existing chain first (in case of old residual rules)
+        # Attempt to remove existing chain first (clean up old state)
         if self.chain_exists():
             self.log("   Removing existing chain...")
             self.run_iptables(['-F', CHAIN_NAME], check=False) # Flush rules
@@ -57,22 +55,37 @@ class IPTablesManager:
         self.log(f"✓ Created chain '{CHAIN_NAME}'")
     
     def add_whitelist_rules(self, ranges: List[str]) -> None:
-        """Add Australian IP ranges to the whitelist chain."""
-        self.log(f"\n📝 Adding {len(ranges)} Australian IP ranges to whitelist...")
+        """Add Australian IP ranges and PRIVATE/LOCAL IP ranges to the whitelist chain."""
+        
+        # RFC 1918, Localhost, Link-Local, and Multicast IP Ranges (Required for system stability)
+        CRITICAL_LOCAL_RANGES = [
+            '127.0.0.0/8',      # Localhost
+            '10.0.0.0/8',       # RFC 1918 Private A
+            '172.16.0.0/12',    # RFC 1918 Private B
+            '192.168.0.0/16',   # RFC 1918 Private C
+            '169.254.0.0/16',   # Link-Local (APIPA)
+            '224.0.0.0/4',      # Multicast (For DNS/network discovery)
+        ]
+        
+        # 1. Add Localhost and Critical Local Ranges first
+        self.log("\n📝 Adding critical Local/Private IP ranges to whitelist...")
+        for ip_range in CRITICAL_LOCAL_RANGES:
+            # Append rule: IF source matches range, ACCEPT
+            self.run_iptables(['-A', CHAIN_NAME, '-s', ip_range, '-j', 'ACCEPT'], check=False)
+
+        self.log("✓ Added all critical local/private ranges.")
+        
+        # 2. Add Australian Public IP Ranges
+        self.log(f"\n📝 Adding {len(ranges)} Australian Public IP ranges to whitelist...")
         
         for idx, cidr_range in enumerate(ranges, 1):
-            # Append rule: IF source matches range, ACCEPT
             self.run_iptables(['-A', CHAIN_NAME, '-s', cidr_range, '-j', 'ACCEPT'], check=False)
             
             # Progress indicator every 100 ranges
             if idx % 100 == 0:
                 self.log(f"   Added {idx}/{len(ranges)} ranges...")
         
-        # Add localhost to whitelist (critical for local access)
-        self.log("📝 Adding localhost (127.0.0.0/8) to whitelist...")
-        self.run_iptables(['-A', CHAIN_NAME, '-s', '127.0.0.0/8', '-j', 'ACCEPT'])
-        
-        self.log(f"✓ Finished adding all {len(ranges)} ranges to {CHAIN_NAME}")
+        self.log(f"✓ Finished adding all {len(ranges)} Australian ranges to {CHAIN_NAME}")
     
     def apply_firewall_rules(self) -> None:
         """Apply the main firewall rules to link the whitelist and block everything else."""
@@ -82,10 +95,12 @@ class IPTablesManager:
         self.run_iptables(['-D', 'INPUT', '-j', CHAIN_NAME], check=False)
         self.run_iptables(['-D', 'INPUT', '-j', 'DROP'], check=False)
         
-        # Insert whitelist check at the beginning (rule 1) of the INPUT chain
+        # We INSERT the jump to our custom chain at position 1.
+        # Everything that matches AU/Private/Local will ACCEPT and stop processing.
         self.run_iptables(['-I', 'INPUT', '1', '-j', CHAIN_NAME])
         
-        # Add the final DROP rule for everything that did NOT match the whitelist
+        # We APPEND the final DROP rule.
+        # Everything else (i.e., non-whitelisted foreign IPs) will fall through and DROP.
         self.run_iptables(['-A', 'INPUT', '-j', 'DROP'])
         
         self.log("✓ Firewall rules applied successfully! Non-Australian traffic is now BLOCKED.")
@@ -100,8 +115,8 @@ class IPTablesManager:
         
         # 2. Flush and delete the chain
         if self.chain_exists():
-            self.run_iptables(['-F', CHAIN_NAME], check=False) # Flush all rules
-            self.run_iptables(['-X', CHAIN_NAME], check=False) # Delete the chain
+            self.run_iptables(['-F', CHAIN_NAME], check=False)
+            self.run_iptables(['-X', CHAIN_NAME], check=False)
         
         self.log("✓ Firewall rules removed successfully!")
     
@@ -111,9 +126,10 @@ class IPTablesManager:
         print("                 FIREWALL CONFIGURATION COMPLETE")
         print("="*70)
         print("\n📊 Summary:")
-        print(f"   • {range_count} Australian IP ranges whitelisted")
+        print(f"   • {range_count} Australian public IP ranges whitelisted")
         print(f"   • Chain name: {CHAIN_NAME}")
-        print(f"   • All non-Australian traffic: BLOCKED")
+        print(f"   • All non-Australian public traffic: BLOCKED")
+        print("   • Localhost/Private/Link-Local traffic: ALLOWED")
         
         print("\n🔧 To remove these rules:")
         print(f"   sudo python3 {sys.argv[0]} --remove")
