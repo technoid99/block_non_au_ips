@@ -5,15 +5,18 @@ Module for fetching and parsing the APNIC delegated statistics file.
 import sys
 import urllib.request
 import math
+import os 
 from typing import List
 
 # Import constants
 from util import APNIC_URL
-#APNIC_URL = "https://ftp.apnic.net/stats/apnic/delegated-apnic-latest"
 
 
 class APNICFetcher:
     """Handles downloading and parsing APNIC data."""
+    
+    # Define the local filename
+    LOCAL_FILENAME = "delegated-apnic-latest"
     
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
@@ -25,19 +28,43 @@ class APNICFetcher:
     
     def download_apnic_data(self) -> str:
         """
-        Download the APNIC delegated statistics file.
+        Check for local file. If it exists, use it. If not, download and save it.
         
         Returns:
             String content of the file
         """
-        self.log("📥 Downloading Australian IP ranges from APNIC...")
+        
+        # 1. Check for local file
+        if os.path.exists(self.LOCAL_FILENAME):
+            self.log(f"💾 Found local file '{self.LOCAL_FILENAME}'. Using local data.")
+            try:
+                with open(self.LOCAL_FILENAME, 'r', encoding='utf-8') as f:
+                    data = f.read()
+                    self.log(f"✓ Read {len(data)} bytes from local cache.")
+                    return data
+            except Exception as e:
+                # If reading local file fails, proceed to download
+                self.log(f"⚠️ Warning: Failed to read local file: {e}. Attempting download.")
+
+
+        # 2. Download and Save
+        self.log("📥 Local file not found. Downloading Australian IP ranges from APNIC...")
         self.log(f"   Source: {APNIC_URL}")
         
         try:
             with urllib.request.urlopen(APNIC_URL, timeout=30) as response:
                 data = response.read().decode('utf-8')
-                self.log(f"✓ Downloaded {len(data)} bytes")
+                
+                # Save the downloaded data to the local file
+                try:
+                    with open(self.LOCAL_FILENAME, 'w', encoding='utf-8') as f:
+                        f.write(data)
+                    self.log(f"✓ Downloaded and saved {len(data)} bytes to '{self.LOCAL_FILENAME}'.")
+                except Exception as e:
+                    self.log(f"⚠️ Warning: Could not save file locally: {e}")
+                    
                 return data
+                
         except Exception as e:
             print(f"❌ Error downloading APNIC data: {e}")
             sys.exit(1)
@@ -101,31 +128,13 @@ class APNICFetcher:
         if error_count > 0:
             self.log(f"⚠️  Skipped {error_count} invalid entries")
 
-        # --- DEBUG CODE ADDED HERE ---
+        # --- DEBUG CODE ---
         if self.verbose and ranges:
             self.log("\n🔎 First 10 parsed AU ranges (Debug):")
             for i, ip_range in enumerate(ranges[:10]):
                 self.log(f"   [{i+1:02}] {ip_range}")
             if len(ranges) > 10:
                  self.log(f"   ... ({len(ranges) - 10} more ranges not shown)")
-        # -----------------------------
-                
+        # ------------------
+        
         return ranges
-
-#---Module test code--#    
-def test_fetcher():
-    """Test function to run download and parsing when executed directly."""
-    fetcher = APNICFetcher(verbose=True)
-    
-    # 1. Download
-    raw_data = fetcher.download_apnic_data()
-    
-    # 2. Parse (and print the debug lines)
-    au_ranges = fetcher.parse_data(raw_data)
-    
-    print(f"\n✅ Test Complete. Total parsed ranges: {len(au_ranges)}")
-
-if __name__ == '__main__':
-    # NOTE: This file depends on util.py for constants. 
-    # Make sure 'util.py' is in the same directory.
-    test_fetcher()
