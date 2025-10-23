@@ -95,6 +95,7 @@ class IPTablesManager:
         self.run_iptables(['-D', 'INPUT', '-j', CHAIN_NAME], check=False)
         self.run_iptables(['-D', 'INPUT', '-j', 'DROP'], check=False)
         
+        # --- CRITICAL CHANGE ---
         # We INSERT the jump to our custom chain at position 1.
         # Everything that matches AU/Private/Local will ACCEPT and stop processing.
         self.run_iptables(['-I', 'INPUT', '1', '-j', CHAIN_NAME])
